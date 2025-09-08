@@ -36,5 +36,13 @@ func (l *Logic) ServerList() ([]Server, error) {
 	var srvList []Server
 	err = json.Unmarshal(out, &srvList)
 
-	return srvList, err
+	// Filter and keep only where VPN is "wireguard"
+	var filteredList []Server
+	for _, srv := range srvList {
+		if srv.VPN == "wireguard" {
+			filteredList = append(filteredList, srv)
+		}
+	}
+
+	return filteredList, err
 }
