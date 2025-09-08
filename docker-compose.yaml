@@ -1,31 +1,33 @@
 version: '3.7'
 services:
-  protonvpn-wireguard:
-    container_name: protonvpn-wireguard
-    image: qmcgaw/gluetun:v3
+  protonvpn-manager:
+    container_name: protonvpn-manager
+    #image: qmcgaw/gluetun:v3
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: production
     cap_add:
       - NET_ADMIN
       - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
-    environment:
-      - VPN_SERVICE_PROVIDER=protonvpn
-      - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Hungary
-      #- FIREWALL_OUTBOUND_SUBNETS=100.64.0.0/10,192.168.1.0/24 # Tailscale subnet + local LAN
     env_file:
       - .env
+    ports:
+      - "8080:8080"
 
   tailscale:
     container_name: tailscale
     image: tailscale/tailscale:latest
-    network_mode: "service:protonvpn-wireguard"
+    network_mode: "service:protonvpn-manager"
     cap_add:
       - NET_ADMIN
       - NET_RAW
     depends_on:
-      protonvpn-wireguard:
-        condition: service_healthy
+      - protonvpn-manager
+      #protonvpn-manager:
+      #  condition: service_healthy
     volumes:
       - ./tailscale/state:/var/lib/tailscale
     environment:
