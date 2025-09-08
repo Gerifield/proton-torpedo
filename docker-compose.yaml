@@ -1,0 +1,39 @@
+version: '3.7'
+services:
+  protonvpn-wireguard:
+    container_name: protonvpn-wireguard
+    image: qmcgaw/gluetun:v3
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - SERVER_COUNTRIES=Hungary
+      #- FIREWALL_OUTBOUND_SUBNETS=100.64.0.0/10,192.168.1.0/24 # Tailscale subnet + local LAN
+    env_file:
+      - .env
+
+  tailscale:
+    container_name: tailscale
+    image: tailscale/tailscale:latest
+    network_mode: "service:protonvpn-wireguard"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      protonvpn-wireguard:
+        condition: service_healthy
+    volumes:
+      - ./tailscale/state:/var/lib/tailscale
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_HOSTNAME=proton-torpedo-node1
+      - TS_EXTRA_ARGS=--advertise-exit-node
+      - TS_USERSPACE=true
+    restart: unless-stopped
+    env_file:
+      - .env
+
