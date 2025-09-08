@@ -2,15 +2,30 @@ package logic
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
+	"strings"
+	"sync"
 )
 
 // Logic .
-type Logic struct{}
+type Logic struct {
+	logger              *slog.Logger
+	serverListCacheLock sync.Mutex
+	serverListCache     []Server
+
+	runningProcess *exec.Cmd
+}
 
 // New .
-func New() *Logic {
-	return &Logic{}
+func New(logger *slog.Logger) *Logic {
+	return &Logic{
+		logger:          logger,
+		serverListCache: make([]Server, 0),
+	}
 }
 
 type Server struct {
@@ -44,5 +59,100 @@ func (l *Logic) ServerList() ([]Server, error) {
 		}
 	}
 
+	// Cache the list
+	l.serverListCacheLock.Lock()
+	l.serverListCache = filteredList
+	l.serverListCacheLock.Unlock()
+	l.logger.Info("Server list loaded", slog.Int("num_servers", len(filteredList)))
+
 	return filteredList, err
+}
+
+func (l *Logic) Connect(serverName string) error {
+	l.serverListCacheLock.Lock()
+	cacheLen := len(l.serverListCache)
+	l.serverListCacheLock.Unlock()
+
+	// Minimal race condition here is fine
+	if cacheLen == 0 {
+		l.logger.Info("updating server list before connecting")
+		// Load the server list if not already loaded
+		_, err := l.ServerList()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Get details based on the server name
+	var selectedServer Server
+	l.serverListCacheLock.Lock()
+	for _, srv := range l.serverListCache {
+		if srv.ServerName == serverName {
+			selectedServer = srv
+			break
+		}
+	}
+	l.serverListCacheLock.Unlock()
+
+	if selectedServer.ServerName == "" {
+		return errors.New("server not found")
+	}
+
+	// If there's a running process, kill it first
+	if l.runningProcess != nil && l.runningProcess.Process != nil {
+		l.logger.Info("killing existing process before starting a new one")
+		err := l.runningProcess.Process.Signal(os.Interrupt)
+		if err != nil {
+			return fmt.Errorf("failed to kill existing process: %w", err)
+		}
+
+		l.logger.Info("wait for process to exit")
+		_, err = l.runningProcess.Process.Wait()
+
+		if err != nil {
+			return fmt.Errorf("failed to wait for existing process to exit: %w", err)
+		}
+
+		l.logger.Info("process exited, starting new one")
+		l.runningProcess = nil
+	}
+
+	cmd := exec.Command("./gluetun-entrypoint")
+	// Set the output to the same as the current process
+	cmd.Stdout = &logWrapper{logger: l.logger}
+
+	// Copy env variable, but skip the `SERVER_HOSTNAMES` since we'll use our own
+	localEnvs := os.Environ()
+	var filteredEnvs []string
+	for _, env := range localEnvs {
+		if !strings.HasPrefix(env, "SERVER_HOSTNAMES=") {
+			filteredEnvs = append(filteredEnvs, env)
+		}
+	}
+
+	// Add our own SERVER_HOSTNAMES
+	filteredEnvs = append(filteredEnvs, fmt.Sprintf("SERVER_HOSTNAMES=%s", selectedServer.Hostname))
+	// Set the envs
+	cmd.Env = filteredEnvs
+
+	err := cmd.Start()
+	if err != nil {
+		return err
+	}
+
+	l.logger.Info("new process starting", slog.Int("pid", cmd.Process.Pid), slog.String("server", selectedServer.ServerName))
+	l.runningProcess = cmd
+
+	return nil
+}
+
+type logWrapper struct {
+	logger *slog.Logger
+}
+
+func (l *logWrapper) Write(p []byte) (n int, err error) {
+	payload := strings.TrimSpace(string(p))
+	l.logger.Info("[gluetun] process log", slog.String("msg", payload))
+
+	return len(p), nil
 }

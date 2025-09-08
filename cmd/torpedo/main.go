@@ -3,13 +3,19 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"proton-torpedo/internal/logic"
 	"proton-torpedo/internal/server"
 )
 
 func main() {
-	l := logic.New()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	l := logic.New(logger)
 	srv := server.New(l)
 
 	fmt.Println("Starting server on :8080")

@@ -31,10 +31,42 @@ func (l *Logic) listServers(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(servers)
 }
 
+func (l *Logic) connectServer(w http.ResponseWriter, r *http.Request) {
+	type request struct {
+		ServerName string `json:"server_name"`
+	}
+
+	var req request
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.ServerName == "" {
+		http.Error(w, "server_name is required", http.StatusBadRequest)
+		return
+	}
+
+	err = l.l.Connect(req.ServerName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(struct {
+		Success string `json:"success"`
+	}{
+		Success: "ok",
+	})
+}
+
 func (l *Logic) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir("./static/")))
 	mux.HandleFunc("GET /api/list", l.listServers)
+	mux.HandleFunc("POST /api/connect", l.connectServer)
 
 	return mux
 }

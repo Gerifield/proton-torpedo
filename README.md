@@ -15,6 +15,7 @@ docker-compose up -d
 This should connect to tailscale and proton.
 
 You can then access the web interface at http://<hostname>:8080 to switch between exit nodes.
+The connection will be built based on the `SERVER_HOSTNAMES` env variable, this will be overwritten by manager, the rest of the variables will be simply copied from the .env file.
 
 ## Future plans
 
