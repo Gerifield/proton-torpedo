@@ -13,6 +13,20 @@
 </head>
 <body>
 
+<div class="container mt-5">
+    <h2>Your IP Information</h2>
+    <div id="ip-info-card" class="card">
+        <div class="card-body">
+            <p><strong>IP:</strong> <span id="ip-address">Loading...</span></p>
+            <p><strong>Country:</strong> <span id="ip-country">Loading...</span></p>
+            <p><strong>Organization:</strong> <span id="ip-org">Loading...</span></p>
+            <p><strong>Region:</strong> <span id="ip-region">Loading...</span></p>
+            <p><strong>City:</strong> <span id="ip-city">Loading...</span></p>
+            <button id="refresh-ip-btn" class="btn btn-primary mt-3">Refresh IP</button>
+        </div>
+    </div>
+</div>
+
 <div class="container">
     <h1 class="mb-4">VPN Servers</h1>
     <div class="table-responsive">
@@ -100,6 +114,9 @@
           button.textContent = 'Connected ✅';
           button.classList.remove('btn-primary');
           button.classList.add('btn-success');
+          setTimeout(() => {
+            window.location.reload();
+          }, 2000);
         })
         .catch((error) => {
           console.error('Error:', error);
@@ -116,6 +133,45 @@
           }, 3000);
         });
     }
+  });
+
+  function fetchIpInfo() {
+    fetch('/api/ip')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+        return response.json();
+      })
+      .then(data => {
+        document.getElementById('ip-address').textContent = data.ip;
+        document.getElementById('ip-country').textContent = data.country;
+        document.getElementById('ip-org').textContent = data.org;
+        document.getElementById('ip-region').textContent = data.region;
+        document.getElementById('ip-city').textContent = data.city;
+      })
+      .catch(error => {
+        console.error('There was a problem fetching the IP info:', error);
+        document.getElementById('ip-address').textContent = 'Error';
+        document.getElementById('ip-country').textContent = 'Error';
+        document.getElementById('ip-org').textContent = 'Error';
+        document.getElementById('ip-region').textContent = 'Error';
+        document.getElementById('ip-city').textContent = 'Error';
+      });
+  }
+
+  // Load IP information when the page loads
+  document.addEventListener('DOMContentLoaded', fetchIpInfo);
+
+  // Add event listener for the refresh button
+  document.getElementById('refresh-ip-btn').addEventListener('click', function (event) {
+    document.getElementById('ip-address').textContent = "Loading...";
+    document.getElementById('ip-country').textContent = "Loading...";
+    document.getElementById('ip-org').textContent = "Loading...";
+    document.getElementById('ip-region').textContent = "Loading...";
+    document.getElementById('ip-city').textContent = "Loading...";
+
+    fetchIpInfo()
   });
 </script>
 

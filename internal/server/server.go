@@ -31,6 +31,18 @@ func (l *Logic) listServers(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(servers)
 }
 
+func (l *Logic) ipInfo(w http.ResponseWriter, r *http.Request) {
+	info, err := l.l.CheckIP()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(info)
+}
+
 func (l *Logic) connectServer(w http.ResponseWriter, r *http.Request) {
 	type request struct {
 		ServerName string `json:"server_name"`
@@ -66,6 +78,7 @@ func (l *Logic) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir("./static/")))
 	mux.HandleFunc("GET /api/list", l.listServers)
+	mux.HandleFunc("GET /api/ip", l.ipInfo)
 	mux.HandleFunc("POST /api/connect", l.connectServer)
 
 	return mux
