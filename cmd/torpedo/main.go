@@ -18,8 +18,13 @@ func main() {
 	l := logic.New(logger)
 	srv := server.New(l)
 
-	fmt.Println("Starting server on :8080")
-	if err := srv.ListenAndServer(":8080"); err != nil {
+	listen := os.Getenv("LISTEN_ADDR")
+	if listen == "" {
+		listen = ":8081"
+	}
+
+	fmt.Println("Starting server on", listen)
+	if err := srv.ListenAndServer(listen); err != nil {
 		if !errors.Is(err, http.ErrServerClosed) {
 			fmt.Println("server error:", err)
 		}

@@ -15,7 +15,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080"
+      - "8081:8081"
 
   tailscale:
     container_name: tailscale
