@@ -5,13 +5,29 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
+
+// ipClient never reuses connections and has a short timeout. Reusing a keep-
+// alive that was established over the (now-gone) VPN interface causes the next
+// request to hang until an OS-level TCP timeout, so keepalives are disabled.
+var ipClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: -1,
+		}).DialContext,
+	},
+}
 
 // Logic .
 type Logic struct {
@@ -160,9 +176,64 @@ func (l *Logic) Disconnect() error {
 	l.runningProcess = nil
 	l.activeServerName = ""
 
+	// gluetun installs iptables DROP rules for anything not going through the
+	// VPN interface. Its SIGINT shutdown does not reset them, so once the VPN
+	// process is gone all outbound traffic (e.g. /api/ip -> ipinfo.io) is
+	// blocked until the next Connect() reinitializes the firewall. Flush the
+	// rules ourselves to restore normal networking after a disconnect.
+	l.resetFirewall()
+
+	// gluetun also rewrites /etc/resolv.conf to point at its local DNS at
+	// 127.0.0.1:53. That DNS is gone with the process, so name resolution
+	// stops working until we point resolv.conf at a public resolver.
+	l.resetResolvConf()
+
 	l.clearState()
 	l.broadcaster.write("Disconnected.")
 	return nil
+}
+
+// resetFirewall undoes gluetun's kill-switch after it exits. Gluetun installs
+// DROP policies AND explicit DROP rules on INPUT/FORWARD/OUTPUT plus NAT
+// entries, and its SIGINT shutdown does not restore any of them — so all
+// outbound traffic stays blocked until we reset.
+//
+// Safe scope here: Tailscale runs in userspace mode (TS_USERSPACE=true) so it
+// does not add iptables rules in this netns, and no other rules exist beyond
+// what gluetun installed. Flushing filter + nat therefore removes only
+// gluetun's rules.
+func (l *Logic) resetFirewall() {
+	commands := [][]string{
+		{"-P", "INPUT", "ACCEPT"},
+		{"-P", "FORWARD", "ACCEPT"},
+		{"-P", "OUTPUT", "ACCEPT"},
+		{"-F"},
+		{"-X"},
+		{"-t", "nat", "-F"},
+		{"-t", "nat", "-X"},
+	}
+	for _, args := range commands {
+		out, err := exec.Command("iptables", args...).CombinedOutput()
+		if err != nil {
+			l.logger.Warn("iptables reset failed",
+				"args", strings.Join(args, " "),
+				"err", err,
+				"output", strings.TrimSpace(string(out)))
+		}
+	}
+	l.broadcaster.write("Firewall rules cleared.")
+}
+
+// resetResolvConf overwrites /etc/resolv.conf with public DNS servers.
+// Gluetun replaces the file so requests go through its local DNS (127.0.0.1),
+// which stops resolving once gluetun exits.
+func (l *Logic) resetResolvConf() {
+	const contents = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+	if err := os.WriteFile("/etc/resolv.conf", []byte(contents), 0644); err != nil {
+		l.logger.Warn("failed to reset /etc/resolv.conf", "err", err)
+		return
+	}
+	l.broadcaster.write("DNS restored (1.1.1.1, 8.8.8.8).")
 }
 
 func (l *Logic) clearState() {
@@ -258,7 +329,7 @@ func (l *Logic) Connect(serverName string) error {
 }
 
 func (l *Logic) CheckIP() (IPInfo, error) {
-	resp, err := http.Get("http://ipinfo.io")
+	resp, err := ipClient.Get("http://ipinfo.io")
 	if err != nil {
 		return IPInfo{}, err
 	}
