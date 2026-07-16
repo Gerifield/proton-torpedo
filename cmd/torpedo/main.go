@@ -16,6 +16,12 @@ func main() {
 	}))
 
 	l := logic.New(logger)
+
+	// Reconnect to the last active server if one was saved before this restart.
+	if err := l.Restore(); err != nil {
+		logger.Warn("failed to restore previous connection", "err", err)
+	}
+
 	srv := server.New(l)
 
 	listen := os.Getenv("LISTEN_ADDR")

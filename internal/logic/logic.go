@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -18,14 +19,24 @@ type Logic struct {
 	serverListCacheLock sync.Mutex
 	serverListCache     []Server
 
-	runningProcess *exec.Cmd
+	processMu        sync.Mutex
+	runningProcess   *exec.Cmd
+	activeServerName string
+
+	broadcaster LogBroadcaster
+	stateFile   string
 }
 
 // New .
 func New(logger *slog.Logger) *Logic {
+	stateFile := os.Getenv("STATE_FILE")
+	if stateFile == "" {
+		stateFile = "/data/torpedo-state.json"
+	}
 	return &Logic{
 		logger:          logger,
 		serverListCache: make([]Server, 0),
+		stateFile:       stateFile,
 	}
 }
 
@@ -81,6 +92,53 @@ func (l *Logic) ServerList() ([]Server, error) {
 	return filteredList, err
 }
 
+type savedState struct {
+	ServerName string `json:"server_name"`
+}
+
+func (l *Logic) saveState(serverName string) {
+	dir := filepath.Dir(l.stateFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		l.logger.Warn("failed to create state directory", "err", err)
+		return
+	}
+	data, err := json.Marshal(savedState{ServerName: serverName})
+	if err != nil {
+		l.logger.Warn("failed to marshal state", "err", err)
+		return
+	}
+	if err := os.WriteFile(l.stateFile, data, 0600); err != nil {
+		l.logger.Warn("failed to save state file", "err", err, "path", l.stateFile)
+	}
+}
+
+// Restore reconnects to the last active server saved before a restart.
+func (l *Logic) Restore() error {
+	data, err := os.ReadFile(l.stateFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var s savedState
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	if s.ServerName == "" {
+		return nil
+	}
+	l.broadcaster.write(fmt.Sprintf("Restoring last active connection: %s", s.ServerName))
+	return l.Connect(s.ServerName)
+}
+
+// Status returns the active server name and whether a process is running.
+func (l *Logic) Status() (serverName string, connected bool) {
+	l.processMu.Lock()
+	defer l.processMu.Unlock()
+	return l.activeServerName, l.runningProcess != nil && l.runningProcess.Process != nil
+}
+
 func (l *Logic) Connect(serverName string) error {
 	l.serverListCacheLock.Lock()
 	cacheLen := len(l.serverListCache)
@@ -111,8 +169,12 @@ func (l *Logic) Connect(serverName string) error {
 		return errors.New("server not found")
 	}
 
+	l.processMu.Lock()
+	defer l.processMu.Unlock()
+
 	// If there's a running process, kill it first
 	if l.runningProcess != nil && l.runningProcess.Process != nil {
+		l.broadcaster.write("Stopping current connection...")
 		l.logger.Info("killing existing process before starting a new one")
 		err := l.runningProcess.Process.Signal(os.Interrupt)
 		if err != nil {
@@ -130,9 +192,10 @@ func (l *Logic) Connect(serverName string) error {
 		l.runningProcess = nil
 	}
 
+	l.broadcaster.write(fmt.Sprintf("Connecting to %s (%s)...", selectedServer.ServerName, selectedServer.Hostname))
+
 	cmd := exec.Command("./gluetun-entrypoint")
-	// Set the output to the same as the current process
-	cmd.Stdout = &logWrapper{logger: l.logger}
+	cmd.Stdout = &logWrapper{logger: l.logger, broadcaster: &l.broadcaster}
 
 	// Copy env variable, but skip the `SERVER_HOSTNAMES` since we'll use our own
 	localEnvs := os.Environ()
@@ -155,6 +218,9 @@ func (l *Logic) Connect(serverName string) error {
 
 	l.logger.Info("new process starting", slog.Int("pid", cmd.Process.Pid), slog.String("server", selectedServer.ServerName))
 	l.runningProcess = cmd
+	l.activeServerName = selectedServer.ServerName
+
+	l.saveState(selectedServer.ServerName)
 
 	return nil
 }
@@ -172,13 +238,76 @@ func (l *Logic) CheckIP() (IPInfo, error) {
 	return ipInfo, err
 }
 
+// SubscribeLogs returns a channel of incoming log lines and the recent history.
+func (l *Logic) SubscribeLogs() (chan string, []string) {
+	return l.broadcaster.Subscribe()
+}
+
+// UnsubscribeLogs removes the subscriber and closes its channel.
+func (l *Logic) UnsubscribeLogs(ch chan string) {
+	l.broadcaster.Unsubscribe(ch)
+}
+
+// LogBroadcaster fans out log lines to SSE subscribers with a history buffer.
+type LogBroadcaster struct {
+	mu          sync.Mutex
+	history     []string
+	subscribers []chan string
+}
+
+const logHistorySize = 200
+
+func (b *LogBroadcaster) write(line string) {
+	b.mu.Lock()
+	b.history = append(b.history, line)
+	if len(b.history) > logHistorySize {
+		b.history = b.history[len(b.history)-logHistorySize:]
+	}
+	subs := make([]chan string, len(b.subscribers))
+	copy(subs, b.subscribers)
+	b.mu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- line:
+		default: // drop if subscriber is slow
+		}
+	}
+}
+
+func (b *LogBroadcaster) Subscribe() (chan string, []string) {
+	ch := make(chan string, 64)
+	b.mu.Lock()
+	hist := make([]string, len(b.history))
+	copy(hist, b.history)
+	b.subscribers = append(b.subscribers, ch)
+	b.mu.Unlock()
+	return ch, hist
+}
+
+func (b *LogBroadcaster) Unsubscribe(ch chan string) {
+	b.mu.Lock()
+	for i, sub := range b.subscribers {
+		if sub == ch {
+			b.subscribers = append(b.subscribers[:i], b.subscribers[i+1:]...)
+			break
+		}
+	}
+	b.mu.Unlock()
+	close(ch)
+}
+
 type logWrapper struct {
-	logger *slog.Logger
+	logger      *slog.Logger
+	broadcaster *LogBroadcaster
 }
 
 func (l *logWrapper) Write(p []byte) (n int, err error) {
 	payload := strings.TrimSpace(string(p))
-	l.logger.Info("[gluetun] process log", slog.String("msg", payload))
+	if payload != "" {
+		l.logger.Info("[gluetun] process log", slog.String("msg", payload))
+		l.broadcaster.write(payload)
+	}
 
 	return len(p), nil
 }
