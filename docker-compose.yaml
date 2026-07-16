@@ -1,4 +1,3 @@
-version: '3.7'
 services:
   protonvpn-manager:
     container_name: protonvpn-manager

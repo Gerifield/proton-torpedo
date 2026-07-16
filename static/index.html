@@ -21,6 +21,14 @@
         }
         #log-box .log-line { display: block; }
         tr.active-row { background-color: #d1fae5 !important; }
+        thead .filter-row th { background-color: #f8f9fa; padding: 4px; }
+        thead .filter-row input,
+        thead .filter-row select {
+            font-size: 0.8rem;
+            padding: 2px 4px;
+            width: 100%;
+            box-sizing: border-box;
+        }
     </style>
 </head>
 <body>
@@ -65,6 +73,19 @@
                 <th scope="col">IPs</th>
                 <th scope="col">Action</th>
             </tr>
+            <tr class="filter-row">
+                <th><input type="text" data-filter="text" data-field="vpn" placeholder="filter..."></th>
+                <th><input type="text" data-filter="text" data-field="country" placeholder="filter..."></th>
+                <th><input type="text" data-filter="text" data-field="city" placeholder="filter..."></th>
+                <th><input type="text" data-filter="text" data-field="server_name" placeholder="filter..."></th>
+                <th><input type="text" data-filter="text" data-field="hostname" placeholder="filter..."></th>
+                <th><select data-filter="bool" data-field="tcp"><option value="">All</option><option value="true">✅</option><option value="false">❌</option></select></th>
+                <th><select data-filter="bool" data-field="udp"><option value="">All</option><option value="true">✅</option><option value="false">❌</option></select></th>
+                <th><select data-filter="bool" data-field="stream"><option value="">All</option><option value="true">✅</option><option value="false">❌</option></select></th>
+                <th><select data-filter="bool" data-field="port_forward"><option value="">All</option><option value="true">✅</option><option value="false">❌</option></select></th>
+                <th><input type="text" data-filter="text" data-field="ips" placeholder="filter..."></th>
+                <th><button id="clear-filters-btn" class="btn btn-outline-light btn-sm" type="button">Clear</button></th>
+            </tr>
             </thead>
             <tbody id="server-table-body">
             </tbody>
@@ -74,6 +95,7 @@
 
 <script>
   let activeServerName = '';
+  let allServers = [];
 
   // --- Status badge ---
   function fetchStatus() {
@@ -149,32 +171,74 @@
         return response.json();
       })
       .then(data => {
-        const tableBody = document.getElementById('server-table-body');
-        data.forEach(server => {
-          const row = document.createElement('tr');
-          row.innerHTML = `
-            <td>${server.vpn}</td>
-            <td>${server.country}</td>
-            <td>${server.city}</td>
-            <td>${server.server_name}</td>
-            <td>${server.hostname}</td>
-            <td>${server.tcp ? '✅' : '❌'}</td>
-            <td>${server.udp ? '✅' : '❌'}</td>
-            <td>${server.stream ? '✅' : '❌'}</td>
-            <td>${server.port_forward ? '✅' : '❌'}</td>
-            <td>${server.ips.join(', ')}</td>
-            <td><button class="btn btn-primary btn-sm connect-btn" data-server-name="${server.server_name}">Connect</button></td>
-          `;
-          tableBody.appendChild(row);
-        });
-        highlightActiveRow();
+        allServers = data || [];
+        renderServerTable();
       })
       .catch(error => {
         console.error('Failed to load servers:', error);
         const tableBody = document.getElementById('server-table-body');
         tableBody.innerHTML = `<tr><td colspan="11" class="text-danger text-center">Failed to load server data. Please check the network connection.</td></tr>`;
       });
+
+    document.querySelectorAll('.filter-row [data-filter]').forEach(el => {
+      const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+      el.addEventListener(evt, renderServerTable);
+    });
+
+    document.getElementById('clear-filters-btn').addEventListener('click', function() {
+      document.querySelectorAll('.filter-row [data-filter]').forEach(el => { el.value = ''; });
+      renderServerTable();
+    });
   });
+
+  function getFilters() {
+    const filters = [];
+    document.querySelectorAll('.filter-row [data-filter]').forEach(el => {
+      const value = el.value;
+      if (value === '') return;
+      filters.push({ type: el.dataset.filter, field: el.dataset.field, value });
+    });
+    return filters;
+  }
+
+  function serverMatches(server, filters) {
+    return filters.every(f => {
+      const fieldValue = server[f.field];
+      if (f.type === 'bool') return String(!!fieldValue) === f.value;
+      if (f.type === 'select') return String(fieldValue) === f.value;
+      const haystack = Array.isArray(fieldValue) ? fieldValue.join(', ') : String(fieldValue ?? '');
+      return haystack.toLowerCase().includes(f.value.toLowerCase());
+    });
+  }
+
+  function renderServerTable() {
+    const tableBody = document.getElementById('server-table-body');
+    const filters = getFilters();
+    const filtered = allServers.filter(s => serverMatches(s, filters));
+    tableBody.innerHTML = '';
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="11" class="text-muted text-center">No servers match the current filters.</td></tr>`;
+      return;
+    }
+    filtered.forEach(server => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${server.vpn}</td>
+        <td>${server.country}</td>
+        <td>${server.city}</td>
+        <td>${server.server_name}</td>
+        <td>${server.hostname}</td>
+        <td>${server.tcp ? '✅' : '❌'}</td>
+        <td>${server.udp ? '✅' : '❌'}</td>
+        <td>${server.stream ? '✅' : '❌'}</td>
+        <td>${server.port_forward ? '✅' : '❌'}</td>
+        <td>${server.ips.join(', ')}</td>
+        <td><button class="btn btn-primary btn-sm connect-btn" data-server-name="${server.server_name}">Connect</button></td>
+      `;
+      tableBody.appendChild(row);
+    });
+    highlightActiveRow();
+  }
 
   // --- Connect button ---
   document.addEventListener('click', function(event) {
