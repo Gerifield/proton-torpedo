@@ -139,6 +139,38 @@ func (l *Logic) Status() (serverName string, connected bool) {
 	return l.activeServerName, l.runningProcess != nil && l.runningProcess.Process != nil
 }
 
+// Disconnect stops the running VPN process and clears the persisted state so a
+// restart does not reconnect.
+func (l *Logic) Disconnect() error {
+	l.processMu.Lock()
+	defer l.processMu.Unlock()
+
+	if l.runningProcess == nil || l.runningProcess.Process == nil {
+		return nil
+	}
+
+	l.broadcaster.write("Disconnecting...")
+	l.logger.Info("stopping VPN process")
+	if err := l.runningProcess.Process.Signal(os.Interrupt); err != nil {
+		return fmt.Errorf("failed to signal process: %w", err)
+	}
+	if _, err := l.runningProcess.Process.Wait(); err != nil {
+		return fmt.Errorf("failed to wait for process: %w", err)
+	}
+	l.runningProcess = nil
+	l.activeServerName = ""
+
+	l.clearState()
+	l.broadcaster.write("Disconnected.")
+	return nil
+}
+
+func (l *Logic) clearState() {
+	if err := os.Remove(l.stateFile); err != nil && !os.IsNotExist(err) {
+		l.logger.Warn("failed to remove state file", "err", err, "path", l.stateFile)
+	}
+}
+
 func (l *Logic) Connect(serverName string) error {
 	l.serverListCacheLock.Lock()
 	cacheLen := len(l.serverListCache)

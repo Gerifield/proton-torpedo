@@ -75,6 +75,17 @@ func (l *Logic) connectServer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (l *Logic) disconnectHandler(w http.ResponseWriter, r *http.Request) {
+	if err := l.l.Disconnect(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Success string `json:"success"`
+	}{Success: "ok"})
+}
+
 func (l *Logic) statusHandler(w http.ResponseWriter, r *http.Request) {
 	serverName, connected := l.l.Status()
 	w.Header().Set("Content-Type", "application/json")
@@ -129,6 +140,7 @@ func (l *Logic) routes() http.Handler {
 	mux.HandleFunc("GET /api/list", l.listServers)
 	mux.HandleFunc("GET /api/ip", l.ipInfo)
 	mux.HandleFunc("POST /api/connect", l.connectServer)
+	mux.HandleFunc("POST /api/disconnect", l.disconnectHandler)
 	mux.HandleFunc("GET /api/status", l.statusHandler)
 	mux.HandleFunc("GET /api/logs", l.logsHandler)
 
