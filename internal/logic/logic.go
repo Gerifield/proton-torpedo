@@ -328,17 +328,54 @@ func (l *Logic) Connect(serverName string) error {
 	return nil
 }
 
+type ipWhoIsResponse struct {
+	Success       bool    `json:"success"`
+	Message       string  `json:"message"`
+	IP            string  `json:"ip"`
+	City          string  `json:"city"`
+	Region        string  `json:"region"`
+	Country       string  `json:"country"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	Postal        string  `json:"postal"`
+	Connection    struct {
+		Org string `json:"org"`
+		ISP string `json:"isp"`
+	} `json:"connection"`
+	Timezone struct {
+		ID string `json:"id"`
+	} `json:"timezone"`
+}
+
 func (l *Logic) CheckIP() (IPInfo, error) {
-	resp, err := ipClient.Get("http://ipinfo.io")
+	resp, err := ipClient.Get("https://ipwho.is/")
 	if err != nil {
 		return IPInfo{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	var ipInfo IPInfo
-	err = json.NewDecoder(resp.Body).Decode(&ipInfo)
+	var raw ipWhoIsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return IPInfo{}, err
+	}
+	if !raw.Success {
+		return IPInfo{}, fmt.Errorf("ipwho.is error: %s", raw.Message)
+	}
 
-	return ipInfo, err
+	org := raw.Connection.Org
+	if org == "" {
+		org = raw.Connection.ISP
+	}
+	return IPInfo{
+		IP:       raw.IP,
+		City:     raw.City,
+		Region:   raw.Region,
+		Country:  raw.Country,
+		Loc:      fmt.Sprintf("%f,%f", raw.Latitude, raw.Longitude),
+		Org:      org,
+		Postal:   raw.Postal,
+		Timezone: raw.Timezone.ID,
+	}, nil
 }
 
 // SubscribeLogs returns a channel of incoming log lines and the recent history.
