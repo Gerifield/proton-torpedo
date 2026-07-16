@@ -3,8 +3,6 @@ Tailscale with ProtonVPN exit node
 
 This small docker package contains a manager which allows you to easily switch between ProtonVPN exit nodes while using Tailscale.
 
-**_Note: This is still in alpha, it works, but not stable enough for continuous usage._**
-
 ## Usage
 
 Copy the .env.example file to .env and fill in your credentials.
