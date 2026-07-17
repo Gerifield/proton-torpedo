@@ -1,6 +1,7 @@
 services:
   protonvpn-manager:
     container_name: protonvpn-manager
+    restart: unless-stopped
     #image: qmcgaw/gluetun:v3
     build:
       context: .
@@ -22,6 +23,7 @@ services:
 
   tailscale:
     container_name: tailscale
+    restart: unless-stopped
     image: tailscale/tailscale:latest
     network_mode: "service:protonvpn-manager"
     cap_add:
